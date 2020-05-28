@@ -1,27 +1,17 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: LOG=false output cmake and vs output to console
-:: LOG=true logs cmake and vs output to cmake.log, visualstudio.log
-set LOG=false
-
 TITLE PvPGN Magic Builder for Windows
 color 1f
 echo.
 echo *:*:*:*:*:*:*:*:*-  P v P G N  M a g i c  B u i l d e r  -*:*:*:*:*:*:*:*:*:*:*
 echo *                                                                             *
-echo *   Copyright 2011-2014, HarpyWar (harpywar@gmail.com)                        *
-echo *   http://harpywar.com                                                       *
+echo *   Copyright 2011-2020, HarpyWar (harpywar@gmail.com)                        *
+echo *   https://pvpgn.pro                                                         *
 echo *                                                                             *
 echo *:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*:*
-set CURRENT_PATH=%~dp0
-:: change path to where script is runned
-cd /D "%CURRENT_PATH%"
 
-
-:: localization
-@call module\i18n.inc.bat
-set i18n=module\i18n.inc.bat
+@call module\config.inc.bat
 
 
 :: disallow invalid characters in the path (otherwise cmake fails configuration)
@@ -37,19 +27,6 @@ if [%invalid_path%]==[true] (
 )
 
 
-:: ----------- VARIABLES ------------
-@set URL_UPDATE=https://raw.githubusercontent.com/HarpyWar/pvpgn-magic-builder/master/
-
-@set PVPGN_SOURCE=source\
-@set PVPGN_BUILD=build\
-@set PVPGN_RELEASE=release\
-
-@set PVPGN_ZIP=https://github.com/HarpyWar/pvpgn/archive/master.zip
-
-@set ZLIB_PATH=module\include\zlib\1.2.8\
-@set LUA_PATH=module\include\lua\5.1\
-@set ATLMFC_INCLUDE_PATH=%CURRENT_PATH%module\include\atlmfc\
-
 
 :: PARAMETERS TO REBUILD
 ::  !order is important!
@@ -58,6 +35,19 @@ set PARAM_VS=%2
 set PARAM_INTERFACE=%3
 set PARAM_DBTYPE=%4
 set PARAM_LUA=%5
+set PARAM_BUILDTYPE=%6
+
+:: build type can be Debug or Release
+if "%PARAM_BUILDTYPE%"=="Debug" (
+	@set PVPGN_RELEASE=debug\
+	echo.
+	echo    Debug build type is selected
+	echo.
+) else ( 
+	set PARAM_BUILDTYPE=Release
+	:: directory with ready files
+	set PVPGN_RELEASE=release\
+)
 
 
 :: {PARAMETER}, if not empty, skip autoupdate
@@ -90,12 +80,13 @@ echo ---------------------------------------------------------------------------
 if not [%PARAM_REBUILD%]==[] goto :choose_interface
 
 call %i18n% 1_3 "source"
-module\choice
+choice
 if %errorlevel%==2 ( set CHOICE_GIT=n) else ( set CHOICE_GIT=y)
 
 :: if not "n", set to "y"
 if not [%CHOICE_GIT%]==[n] ( 
-	call %i18n% 1_4
+	@call module\select_branch.inc.bat
+	call %i18n% 1_4 "!BRANCH!"
 ) else (
 	call %i18n% 1_5
 )
@@ -113,7 +104,7 @@ call %i18n% 1_7
 call %i18n% 1_8
 echo.
 call %i18n% 1_9
-module\choice /c:12
+choice /c:12
 set CHOICE_INTERFACE=%errorlevel%
 set PARAM_INTERFACE=%CHOICE_INTERFACE%
 
@@ -140,7 +131,7 @@ echo    4) SQLite3
 echo    5) ODBC
 echo.
 call %i18n% 1_9
-module\choice /c:12345
+choice /c:12345
 set CHOICE_DBTYPE=%errorlevel%
 set PARAM_DBTYPE=%CHOICE_DBTYPE%
 
@@ -210,7 +201,7 @@ echo ---------------------------------------------------------------------------
 if not [%PARAM_LUA%]==[] set CHOICE_LUA=%PARAM_LUA%& goto :lua_chosen
 
 call %i18n% 4_1
-module\choice
+choice
 if %errorlevel%==2 ( set CHOICE_LUA=n) else ( set CHOICE_LUA=y)
 set PARAM_LUA=%CHOICE_LUA%
 
@@ -237,14 +228,18 @@ if [%PARAM_REBUILD%]==[] (
 	if not exist %PVPGN_SOURCE% mkdir %PVPGN_SOURCE%
 
 	if not [%CHOICE_GIT%]==[n] ( 
+		set PVPGN_ZIP=%PVPGN_PATH%!BRANCH!.zip
+	
 		:: download source.zip
-		module\autoupdate\wget.exe -O source.zip --no-check-certificate %PVPGN_ZIP% %_zip_log%
-		:: extract files into current directory (pvpgn-master directory is in archive)
-		module\autoupdate\unzip.exe -o source.zip %_zip_log%
+		call %EXEC_TOOL% wget.exe -O source.zip --no-check-certificate !PVPGN_ZIP! %_zip_log%
+
+		:: extract files into current directory (pvpgn-server-master directory is in archive)
+		call %EXEC_TOOL% unzip.exe -o source.zip %_zip_log%
+
 		:: copy files from pvpgn-master to source
-		xcopy /E /R /K /Y pvpgn-master source\ %_zip_log%
+		xcopy /E /R /K /Y pvpgn-server-!BRANCH! source\ %_zip_log%
 		:: remove pvpgn-master
-		rmdir /Q /S pvpgn-master\
+		rmdir /Q /S pvpgn-server-!BRANCH!\
 		:: remove downloaded zip
 		del /F /Q source.zip
 	)
@@ -254,13 +249,17 @@ if [%PARAM_REBUILD%]==[] (
 @call :backup_conf
 
 
-:: {PARAMETER}, if not empty and not "cmake_only" then skip CMake configuration
-if not [%PARAM_REBUILD%]==[] if not [%PARAM_REBUILD%]==[cmake_only] goto :build
+:: {PARAMETER}, if not empty | "auto" | "cmake_only" then skip CMake configuration
+if not [%PARAM_REBUILD%]==[] if not [%PARAM_REBUILD%]==[auto] if not [%PARAM_REBUILD%]==[cmake_only] goto :build
 
 
 :: ----------- MAKE ------------
 echo.
 echo ______________________[ C M A K E  C O N F I G U R E ]__________________________
+
+:: show visual studio paths to get more details
+call %EXEC_TOOL% vswhere.exe
+
 if [%LOG%]==[true] set _cmake_log= ^>cmake.log
 if not exist "%PVPGN_BUILD%" mkdir "%PVPGN_BUILD%"
 
@@ -271,8 +270,16 @@ if exist "%PVPGN_BUILD%CMakeCache.txt" del %PVPGN_BUILD%CMakeCache.txt
 
 if [%CHOICE_INTERFACE%]==[1] ( set _with_gui=false) else ( set _with_gui=true)
 
+:: set cmake compiler flags
+if "%PARAM_BUILDTYPE%"=="Debug" (
+	set CMAKE_FLAGS=-D CMAKE_CXX_FLAGS_DEBUG="/MTd"
+) else (
+	set CMAKE_FLAGS=-D CMAKE_CXX_FLAGS_RELEASE="/MT /Od"
+)
+set CMAKE_VARS=%CMAKE_VARS% %CMAKE_FLAGS%
+
 :: configure and generate solution
-module\cmake\bin\cmake.exe -Wno-dev -G "%GENERATOR%" -D ZLIB_INCLUDE_DIR=%ZLIB_PATH% -D ZLIB_LIBRARY=%ZLIB_PATH%zdll.lib %CMAKE_VARS% -D WITH_WIN32_GUI=%_with_gui% -H%PVPGN_SOURCE% -B%PVPGN_BUILD% %_cmake_log%
+call %EXEC_TOOL% cmake.exe -Wno-dev -G "%GENERATOR%" -A "Win32" -D ZLIB_ROOT=%ZLIB_PATH% -D ZLIB_INCLUDE_DIR=%ZLIB_PATH% -D ZLIB_LIBRARY=%ZLIB_PATH%zdll.lib %CMAKE_VARS% -D CMAKE_CONFIGURATION_TYPES="Debug;Release" -D CMAKE_SUPPRESS_REGENERATION=true -D WITH_WIN32_GUI=%_with_gui% -H%PVPGN_SOURCE% -B%PVPGN_BUILD% %_cmake_log%
 
 
 :: Stop after cmake and setting env vars (feature for appveyor)
@@ -290,39 +297,22 @@ if [%LOG%]==[true] set _vs_log=^>visualstudio.log
 :: check solution for exists 
 IF NOT EXIST "%PVPGN_BUILD%pvpgn.sln" echo. & call %i18n% 1_16 & goto THEEND
 
-:: load visual studio variables
-@call "%VSCOMNTOOLS%vsvars32.bat"
+:: load visual studio variables (new and old vs has different batch files with vars)
+if not ["%VSVER%"]==["v100"] if not ["%VSVER%"]==["v110"] if not ["%VSVER%"]==["v120"] if not ["%VSVER%"]==["v140"] (
+ 	@call "%VSCOMNTOOLS%vcvars32.bat"
+) else (
+	@call "%VSCOMNTOOLS%vsvars32.bat"
+)
 
-:: vcexpress include dir
+:: atlmfc include dir for VC Express version
 set INCLUDE=%ATLMFC_INCLUDE_PATH%;%INCLUDE%
 
-:: use environments is different starting from version 2010
-if not ["%VSVER%"]==["v71"] if not ["%VSVER%"]==["v80"] if not ["%VSVER%"]==["v90"] ( 
-	set useEnv=UseEnv=true
-) else (
-	set useEnv=VCBuildUseEnvironment=true
-)
+set msbuild_exec=MSBuild.exe "%PVPGN_BUILD%pvpgn.sln" /t:Rebuild /p:Configuration=%PARAM_BUILDTYPE% /p:Platform="Win32" /p:UseEnv=true /consoleloggerparameters:Summary;PerformanceSummary;Verbosity=minimal /maxcpucount %_vs_log%
 
-:: vars correction from the vcvars32.bat
-if ["%FrameworkDir%"]==[""] (
-	set FrameworkDir=%FrameworkDir32%
-	set FrameworkVersion=%FrameworkVersion32%
-)
-:: add slash to framework path if not vs2010
-if not ["%VSVER%"]==["v100"] set FrameworkDir=%FrameworkDir%\
-
-:: /maxcpucount is supported starting from vs2008
-if not ["%VSVER%"]==["v71"] if not ["%VSVER%"]==["v80"] (
-	set _max_cpu=/maxcpucount
-)
-:: use framework 3.5 with vs2008
-if ["%VSVER%"]==["v90"] set FrameworkVersion=%Framework35Version%
-:: INFO: each environment should compile with own framework (e.g. 2010 can't compile with 3.5)
-
+:: print command
+echo %msbuild_exec%
 :: compile the solution
-"%FrameworkDir%%FrameworkVersion%\MSBuild.exe" "%PVPGN_BUILD%pvpgn.sln" /t:Rebuild /p:Configuration=Release;%useEnv% /consoleloggerparameters:Summary;PerformanceSummary;Verbosity=minimal %_max_cpu% %_vs_log%
-
-
+%msbuild_exec%
 
 :: ----------- RELEASE ------------
 echo.
@@ -334,7 +324,7 @@ echo ______________________________[ R E L E A S E ]____________________________
 @call :restore_conf
 
 :: check pvpgn exe for exists 
-if not exist "%PVPGN_BUILD%src\bnetd\Release\bnetd.exe" goto :FAIL
+if not exist "%PVPGN_BUILD%src\bnetd\%PARAM_BUILDTYPE%\bnetd.exe" goto :FAIL
 
 
 @call :save_rebuild_config
@@ -345,10 +335,9 @@ if not exist "%PVPGN_RELEASE%" mkdir "%PVPGN_RELEASE%"
 if not exist "%PVPGN_RELEASE%conf" mkdir "%PVPGN_RELEASE%conf"
 @copy /Y "%PVPGN_BUILD%conf\*.conf" "%PVPGN_RELEASE%conf"
 @copy /Y "%PVPGN_BUILD%conf\*.txt" "%PVPGN_RELEASE%conf"
+@copy /Y "%PVPGN_BUILD%conf\*.json" "%PVPGN_RELEASE%conf"
 @copy /Y "%PVPGN_BUILD%conf\bnetd_default_user.plain" "%PVPGN_RELEASE%conf"
 @copy /Y "%PVPGN_SOURCE%conf\bnetd_default_user.cdb" "%PVPGN_RELEASE%conf"
-@copy /Y "%PVPGN_SOURCE%conf\d2server.ini" "%PVPGN_RELEASE%conf"
-@copy /Y "%PVPGN_BUILD%conf\*.conf" "%PVPGN_RELEASE%conf"
 :: replace main configs with win32 versions
 @copy /Y "%PVPGN_SOURCE%conf\bnetd.conf.win32" "%PVPGN_RELEASE%conf\bnetd.conf"
 @copy /Y "%PVPGN_SOURCE%conf\d2cs.conf.win32" "%PVPGN_RELEASE%conf\d2cs.conf"
@@ -367,20 +356,37 @@ if not [%CHOICE_LUA%]==[n] (
 if [%CHOICE_INTERFACE%]==[1] set postfix=Console
 
 :: copy release binaries
-@copy /B /Y "%PVPGN_BUILD%src\bnetd\Release\bnetd.exe" "%PVPGN_RELEASE%PvPGN%postfix%.exe"
-@copy /B /Y "%PVPGN_BUILD%src\d2cs\Release\d2cs.exe" "%PVPGN_RELEASE%D2CS%postfix%.exe"
-@copy /B /Y "%PVPGN_BUILD%src\d2dbs\Release\d2dbs.exe" "%PVPGN_RELEASE%D2DBS%postfix%.exe"
-@copy /B /Y "%PVPGN_BUILD%src\bniutils\Release\bni2tga.exe" "%PVPGN_RELEASE%"
-@copy /B /Y "%PVPGN_BUILD%src\bniutils\Release\bnibuild.exe" "%PVPGN_RELEASE%"
-@copy /B /Y "%PVPGN_BUILD%src\bniutils\Release\bniextract.exe" "%PVPGN_RELEASE%"
-@copy /B /Y "%PVPGN_BUILD%src\bniutils\Release\bnilist.exe" "%PVPGN_RELEASE%"
-@copy /B /Y "%PVPGN_BUILD%src\bniutils\Release\tgainfo.exe" "%PVPGN_RELEASE%"
-@copy /B /Y "%PVPGN_BUILD%src\bnpass\Release\bnpass.exe" "%PVPGN_RELEASE%"
-@copy /B /Y "%PVPGN_BUILD%src\bnpass\Release\sha1hash.exe" "%PVPGN_RELEASE%"
-@copy /B /Y "%PVPGN_BUILD%src\client\Release\bnbot.exe" "%PVPGN_RELEASE%"
-@copy /B /Y "%PVPGN_BUILD%src\client\Release\bnchat.exe" "%PVPGN_RELEASE%"
-@copy /B /Y "%PVPGN_BUILD%src\client\Release\bnftp.exe" "%PVPGN_RELEASE%"
-@copy /B /Y "%PVPGN_BUILD%src\client\Release\bnstat.exe" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\bnetd\%PARAM_BUILDTYPE%\bnetd.exe" "%PVPGN_RELEASE%PvPGN%postfix%.exe"
+@copy /B /Y "%PVPGN_BUILD%src\bnetd\%PARAM_BUILDTYPE%\bnetd.pdb" "%PVPGN_RELEASE%PvPGN%postfix%.pdb"
+@copy /B /Y "%PVPGN_BUILD%src\d2cs\%PARAM_BUILDTYPE%\d2cs.exe" "%PVPGN_RELEASE%D2CS%postfix%.exe"
+@copy /B /Y "%PVPGN_BUILD%src\d2cs\%PARAM_BUILDTYPE%\d2cs.pdb" "%PVPGN_RELEASE%D2CS%postfix%.pdb"
+@copy /B /Y "%PVPGN_BUILD%src\d2dbs\%PARAM_BUILDTYPE%\d2dbs.exe" "%PVPGN_RELEASE%D2DBS%postfix%.exe"
+@copy /B /Y "%PVPGN_BUILD%src\d2dbs\%PARAM_BUILDTYPE%\d2dbs.pdb" "%PVPGN_RELEASE%D2DBS%postfix%.pdb"
+
+@copy /B /Y "%PVPGN_BUILD%src\bniutils\%PARAM_BUILDTYPE%\bni2tga.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\bniutils\%PARAM_BUILDTYPE%\bni2tga.pdb" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\bniutils\%PARAM_BUILDTYPE%\bnibuild.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\bniutils\%PARAM_BUILDTYPE%\bnibuild.pdb" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\bniutils\%PARAM_BUILDTYPE%\bniextract.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\bniutils\%PARAM_BUILDTYPE%\bniextract.pdb" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\bniutils\%PARAM_BUILDTYPE%\bnilist.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\bniutils\%PARAM_BUILDTYPE%\bnilist.pdb" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\bniutils\%PARAM_BUILDTYPE%\tgainfo.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\bniutils\%PARAM_BUILDTYPE%\tgainfo.pdb" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\bnpass\%PARAM_BUILDTYPE%\bnpass.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\bnpass\%PARAM_BUILDTYPE%\bnpass.pdb" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\bnpass\%PARAM_BUILDTYPE%\sha1hash.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\bnpass\%PARAM_BUILDTYPE%\sha1hash.pdb" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\client\%PARAM_BUILDTYPE%\bnbot.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\client\%PARAM_BUILDTYPE%\bnbot.pdb" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\client\%PARAM_BUILDTYPE%\bnchat.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\client\%PARAM_BUILDTYPE%\bnchat.pdb" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\client\%PARAM_BUILDTYPE%\bnftp.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\client\%PARAM_BUILDTYPE%\bnftp.pdb" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\client\%PARAM_BUILDTYPE%\bnstat.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\client\%PARAM_BUILDTYPE%\bnstat.pdb" "%PVPGN_RELEASE%"
+@copy /B /Y "%PVPGN_BUILD%src\bntrackd\%PARAM_BUILDTYPE%\bntrackd.exe" "%PVPGN_RELEASE%"
+if "%PARAM_BUILDTYPE%"=="Debug" @copy /B /Y "%PVPGN_BUILD%src\bntrackd\%PARAM_BUILDTYPE%\bntrackd.pdb" "%PVPGN_RELEASE%"
 
 
 :: copy var directories (they're empty)
@@ -390,7 +396,6 @@ if [%CHOICE_INTERFACE%]==[1] set postfix=Console
 if not exist "%PVPGN_RELEASE%files" mkdir "%PVPGN_RELEASE%files"
 @copy /Y "%PVPGN_SOURCE%files" "%PVPGN_RELEASE%files"
 @del "%PVPGN_RELEASE%files\CMakeLists.txt"
-@del "%PVPGN_RELEASE%files\Makefile.am"
 
 :: copy i18n and lua files with subdirectories
 @xcopy /E /R /K /Y "%PVPGN_SOURCE%conf\i18n" "%PVPGN_RELEASE%conf\i18n\"
@@ -399,7 +404,7 @@ if not exist "%PVPGN_RELEASE%files" mkdir "%PVPGN_RELEASE%files"
 
 :: replace "storage_path"
 if ["%CHOICE_DB_CONF%"]==["y"] (
-	for /f "delims=" %%a in ('cscript "module\replace_line.vbs" "release\conf\bnetd.conf" "storage_path" "!CONF_storage_path!"') do set res=%%a
+	for /f "delims=" %%a in ('cscript "%TOOLS_PATH%replace_line.vbs" "%PVPGN_RELEASE%conf\bnetd.conf" "storage_path" "!CONF_storage_path!"') do set res=%%a
 	if ["!res!"]==["ok"] ( echo storage_path updated in bnetd.conf ) else ( echo Error: storage_path was not updated in bnetd.conf )
 )
 
@@ -412,11 +417,11 @@ goto THEEND
 	exit /b 0
 	
 :backup_conf
-	@call module\recursive_copy.inc.bat module\include\source_replace\ ..\..\..\source\ backup
+	@call %TOOLS_PATH%recursive_copy.bat module\include\source_replace\ ..\..\..\source\ backup
 	exit /b 0
 
 :restore_conf
-	@call module\recursive_copy.inc.bat module\include\source_replace\ ..\..\..\source\ restore
+	@call %TOOLS_PATH%recursive_copy.bat module\include\source_replace\ ..\..\..\source\ restore
 	exit /b 0
 
 
@@ -428,11 +433,22 @@ goto THEEND
 	:: save to file
 	echo @echo off>!fileName!
 	echo build_pvpgn.bat rebuild !PARAM_VS! !PARAM_INTERFACE! !PARAM_DBTYPE! !PARAM_LUA!>>!fileName!
+	
+	rem *** the same for debug ***
+	set fileName=rebuild_pvpgn_debug.bat
+	:: if DB_ENGINE is not empty
+	if not [%DB_ENGINE%]==[] set fileName=rebuild_pvpgn_with_%DB_ENGINE%_debug.bat
+	
+	:: save to file
+	echo @echo off>!fileName!
+	echo build_pvpgn.bat rebuild !PARAM_VS! !PARAM_INTERFACE! !PARAM_DBTYPE! !PARAM_LUA! Debug>>!fileName!
+
 	exit /b 0
 
 :FAIL
 	echo SOMETHING GONE WRONG :-(
-	pause
+	if not [%PARAM_REBUILD%]==[auto] pause
+	exit /b 1
 	goto :eof
 	
 	
@@ -442,4 +458,4 @@ echo.
 echo ___________________________[ C O M P L E T E ]__________________________________
 :: wait for any key
 
-if not [%PARAM_REBUILD%]==[rebuild_total] pause
+if not [%PARAM_REBUILD%]==[auto] pause
